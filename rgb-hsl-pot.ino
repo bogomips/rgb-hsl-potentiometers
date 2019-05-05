@@ -1,193 +1,290 @@
 //http://blog.saikoled.com/post/43693602826/why-every-led-light-should-be-using-hsi
 #include "ColorConverterLib.h"
-#include <IRremote.h>
+#include <timer.h>
 
-// Log all to Serial, comment this line to disable logging
-#define LOG Serial
-// Include must be placed after LOG definition to work
-#include "log.h"
+#include <OneWire.h> // fo temperatures DS18B20
+#include <DallasTemperature.h>
 
-const int RECV_PIN = 7;
-IRrecv irrecv(RECV_PIN);
-decode_results results;
+//#include <Wire.h> 
+#include <LiquidCrystal_I2C.h>
 
-const int redPn = 9;  // the onboard LED
-const int greenPn = 5;  // the onboard LED
-const int bluePn = 6;  // the onboard LED
+const int DISPLAY_ROWS = 4;
+const int DISPLAY_COLS = 20;
 
-const int potRedPn = A0;
-const int potGreenPn = A1;
-const int potBluePn = A2;
-const int potBrightPn = A3;
+LiquidCrystal_I2C lcd(0x27,DISPLAY_ROWS,DISPLAY_COLS); 
+auto timer = timer_create_default();
 
-int potRedVal;
-int potGreenVal;
-int potBlueVal;
+const int MIN_FAN_SPEED = 900;
+const int MAX_FAN_SPEED = 2700;
+const int FAN_PIN =12;
+const int FAN_RPM_PIN =36;
 
-int potRedVal_prev;
-int potGreenVal_prev;
-int potBlueVal_prev;
+const int SLIDER_A = A0; 
+const int SLIDER_B = A1; 
+const int SLIDER_C = A2;
 
-int threshold_ar = 3;
+const int RED_PIN = 3;  
+const int GREEN_PIN = 4; 
+const int BLUE_PIN = 5;  
+
+const int pot_color_threshold = 2;
+
+const int ONE_WIRE_BUS = 10;
+
+OneWire oneWire(ONE_WIRE_BUS); //term pin with 4.7k resistore
+DallasTemperature sensors(&oneWire);
+DeviceAddress insideThermometer;
+//byte addr[8]; //enable for debugging purpuses
+
+int potVal_A;
+int potVal_B;
+int potVal_C;
+
+int potVal_A_prev;
+int potVal_B_prev;
+int potVal_C_prev;
 
 double H;
 double S;
 double L;
 
-double H_prev;
-double S_prev;
-double L_prev;
+//int fan_ticks=0; 
 
-//int rgb[3];
-uint8_t red;
-uint8_t green;
-uint8_t blue;
+char LCD_line[DISPLAY_ROWS][DISPLAY_COLS];
+char LCD_line_prev[DISPLAY_ROWS][DISPLAY_COLS];
 
+/*char LCD_line2[20];
+char LCD_line3[20];
+char LCD_line4[20];
 
-void setup() {
-  //pinMode(BUILTIN_LED, OUTPUT);  // initialize onboard LED as output
-  pinMode(redPn, OUTPUT);  // initialize onboard LED as output
-  pinMode(greenPn, OUTPUT);  // initialize onboard LED as output
-  pinMode(bluePn, OUTPUT);  // initialize onboard LED as output
+char LCD_line1_prev[20];
+char LCD_line2_prev[20];
+char LCD_line3_prev[20];
+char LCD_line4_prev[20];*/
 
-   
-  irrecv.enableIRIn();
-  irrecv.blink13(true);
+//void pickrpm ()
+//This is the interrupt subroutine that increments ticks counts for each HES response.
+//{ fan_ticks++; }
 
-  Serial.begin(9600);
-  Serial.println("Initialization...");
+void setHsl(double _H, double _S, double _L) {
 
+  uint8_t red;
+  uint8_t green;
+  uint8_t blue;
+
+  H = _H;
+  S = _S;
+  L = _L;
+  
+  ColorConverter::HslToRgb(H/360, S/100, L/100, red,green,blue);
+ 
+  sprintf(LCD_line[0], "HSL %d %d %d", (int)H,(int)S,(int)L);
+  sprintf(LCD_line[1], "RGB %d %d %d", red,green,blue);
+    
+  setRgb(red,green,blue);
+  
 }
-
+ 
 void setRgb(int r, int g, int b) {
 
   //int redBr = map(r, 0, 255, 0, 80); // temporary needed not to burn the led
-  int redBr = r;
-  int greenBr =  g;
-  int blueBr = b;
+  //log_printf("R:%i(%i) G:%i(%i) B:%i(%i)\n", redBr, 255-redBr,greenBr, 255-greenBr, blueBr,255-blueBr);
 
-  //Serial.print("Final rgb: ");
-  log_printf("R:%i G:%i B:%i\n", redBr, greenBr, blueBr);
-  log_printf("R:%i G:%i B:%i\n", 255-redBr, 255-greenBr, 255-blueBr);
-
-  //Serial.print(redBr);Serial.print(' ');   
-  //Serial.print(greenBr);Serial.print(' '); 
-  //Serial.println(blueBr);
-
-  analogWrite(redPn, 255-redBr);
-  analogWrite(greenPn, 255-greenBr);
-  analogWrite(bluePn, 255-blueBr);
+  analogWrite(RED_PIN, 255-r);
+  analogWrite(GREEN_PIN, 255-g);
+  analogWrite(BLUE_PIN, 255-b);
 
 }
 
- void setHsl(double H, double S, double L) {
-   ColorConverter::HslToRgb(H/360, S/100, L/100, red,green,blue);
-   setRgb(red,green,blue);
- }
- 
+void update_lcd() {
+
+   char LCD_line_empty[DISPLAY_COLS];
+
+   for (int line=0; line < DISPLAY_ROWS; line++) {
+
+    //Serial.println(LCD_line[line]);
+    //Serial.println(LCD_line_prev[line]);
+    int ret = strcmp(LCD_line[line], LCD_line_prev[line]);
+    
+    //Serial.print("======");Serial.println(ret);
+    
+    if (strcmp(LCD_line[line], LCD_line_prev[line]) !=0 ) {
+      
+       //Serial.print(line);Serial.print(": ");
+       lcd.setCursor(0,line);
+       for (int i=0; i < DISPLAY_COLS-1; i++) {
+        LCD_line_empty[i]=(char)32;
+       }
+       LCD_line_empty[19]="\0";
+       
+      strncpy(LCD_line_empty, LCD_line[line], strlen(LCD_line[line]));
+      strncpy(LCD_line[line], LCD_line_empty, 20);   
+      strncpy(LCD_line_prev[line], LCD_line[line], 20);
+      lcd.print(LCD_line[line]);
+      
+
+       
+      }
+     }
+   
+   /*if (strcmp(LCD_line2, LCD_line2_prev) !=0 ) {
+     lcd.setCursor(0,1);
+     lcd.print(LCD_line2);
+   }
+   if (strcmp(LCD_line3, LCD_line3_prev) !=0 ) {
+     lcd.setCursor(0,2);
+     lcd.print(LCD_line3);
+   }
+   if (strcmp(LCD_line4, LCD_line4_prev) !=0 ) {
+     lcd.setCursor(0,3);
+     lcd.print(LCD_line4);
+   }
+
+   strncpy(LCD_line1_prev, LCD_line1, 20);
+   strncpy(LCD_line2_prev, LCD_line2, 20);
+   strncpy(LCD_line3_prev, LCD_line3, 20);
+   strncpy(LCD_line4_prev, LCD_line4, 20);*/
+
+
+   //Serial.println("freq. (Hz):");
+
+}
+
+void setup() {
+
+  int myEraser = 7;
+  TCCR1B &= ~myEraser; 
+  int myPrescaler = 5;   
+  TCCR1B |= myPrescaler;
+
+  lcd.init(); 
+  lcd.backlight();
+
+  Serial.begin(115200);
+  sensors.begin(); //for temp
+  if (!sensors.getAddress(insideThermometer, 0)) Serial.println("Unable to find address for Device 0"); 
+
+  //pinMode(FAN_PIN, OUTPUT); 
+  pinMode(FAN_PIN, OUTPUT); 
+  pinMode(FAN_RPM_PIN, INPUT); 
+  
+  //attachInterrupt(digitalPinToInterrupt(FAN_RPM_PIN), pickrpm, RISING); 
+  digitalWrite(FAN_RPM_PIN,HIGH);
+
+  //initialization of the arrays, otherwise the display stuck
+  //for (int line=0; line < DISPLAY_LINES; line++) {
+  sprintf(LCD_line[0], " ");
+  sprintf(LCD_line[1], " ");
+  sprintf(LCD_line[2], " ");
+  sprintf(LCD_line[3], " ");
+  
+  
+
+  //}
+
+  /*sprintf(LCD_line1, " ");
+  sprintf(LCD_line2, " ");
+  sprintf(LCD_line3, " ");
+  sprintf(LCD_line4, " ");*/
+
+  timer.every(400, update_lcd);
+  timer.every(1000, led_security_manager);
+
+}
+
+// function to print a device address, used for debug
+/*void printAddress(DeviceAddress deviceAddress)
+{
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    if (deviceAddress[i] < 16) Serial.print("0");
+    Serial.print(deviceAddress[i], HEX);
+  }
+}*/
+
+void trigger_warning(int error) {
+  // 0 fan
+  // 1 temperature
+}
+
+void led_security_manager() { 
+
+  
+  float tempC = get_led_temp();
+  int fanRpm =  get_fan_rpm();
+
+  if ( (fanRpm < MIN_FAN_SPEED) || (fanRpm > MAX_FAN_SPEED) )
+    trigger_warning(0);
+
+  Serial.println(tempC);
+  Serial.println(fanRpm);
+  Serial.println("-----");
+
+}
+
+int get_fan_rpm() {
+
+  unsigned long pulseDuration;
+  pulseDuration = pulseIn(FAN_RPM_PIN, LOW);
+  double frequency = 1000000/pulseDuration;
+
+  return (int)(frequency/2*60)/2;
+
+}
+
+float get_led_temp() {
+
+  // if F is needed  //Serial.println(DallasTemperature::toFahrenheit(tempC)); 
+  // Arduino does not have %f in sprinf lol.
+  // 4 is mininum width, 2 is precision; float value is copied onto str_temp*/
+  //char str_temp[6];
+  //char returnString[20];
+
+  sensors.setResolution(insideThermometer, 9);
+  sensors.requestTemperatures();
+  float tempC = sensors.getTempC(insideThermometer);
+  //dtostrf(tempC, 4, 2, str_temp);
+  //sprintf(returnString, "%s -",str_temp);
+
+  return tempC;
+}
+
 
 
 void loop() {
 
+  timer.tick();
 
-  potRedVal = analogRead(potRedPn);
-  potGreenVal = analogRead(potGreenPn);
-  potBlueVal = analogRead(potBluePn);
+  potVal_A = analogRead(SLIDER_A);
+  potVal_B = analogRead(SLIDER_B);
+  potVal_C = analogRead(SLIDER_C);
 
-  if  ( (abs(potRedVal-potRedVal_prev)>threshold_ar) || (abs(potGreenVal-potGreenVal_prev)>threshold_ar) || (abs(potBlueVal-potBlueVal_prev)>threshold_ar) ) {
-    
-    Serial.println("From nobs");
-    H = map(potRedVal, 0, 1023, 0, 360);
-    S = map(potGreenVal, 0, 1023, 0, 100);
-    L = map(potBlueVal, 0, 1023, 0, 100);
+  //analogWrite(FAN_PIN,map(potVal_C, 0, 1023, 0, 255));
+  analogWrite(FAN_PIN,255);
 
-    potRedVal_prev = potRedVal;
-    potGreenVal_prev = potGreenVal;
-    potBlueVal_prev = potBlueVal;
-
-    setHsl(H,S,L);
-    
-  }
-  else if (irrecv.decode(&results)) {
-    
-    Serial.println(results.value);   
-
-    switch (results.value) {
-      case 16203967: //OFF
-
-        if ( H != 0 || S != 0 || L != 0 ) {
-          H_prev = H;
-          S_prev = S;
-          L_prev = L;
-          H =0; S=0; L=0;
-        }
-      break;
-      
-      case 16236607: //ON
-      
-        if ( H==0 && S==0 && L==0 ) {
-          H=H_prev; S=S_prev; L=L_prev;
-        }
-        
-      break;
-      
-      case 16195807: //RED
-        H=0; S=100; L=50;
-      break;
-      
-      case 16228447: //GREEN
-        H=120; S=100; L=50;
-      break;
-      
-       case 16212127: //BLUE
-        H=240; S=100; L=50;
-      break;
-      
-      case 16244767: //WHITE
-        H=0; S=0; L=100;
-      break;
-      
-      case 16216207: //PURPLE
-        H=300; S=100; L=25.1;
-      break;
-      
-      case 16197847: //YELLOW
-        H=51; S=100; L=50;
-      break;
-      
-      default:
-        // statements
-      break;
-    }
-    
-    irrecv.resume();
-     
-    //H = H_IR;
-    //S = S_IR;
-    //L = L_IR;
-    
-    setHsl(H,S,L);
-    
-    
-  }
-
-  //Serial.print("HSI: ");
-  //Serial.print(H);Serial.print(' ');   
-  //Serial.print(S);Serial.print(' '); 
-  //Serial.println(L);
-  
-  //hsi2rgb(H, S, I, rgb);
-  
  
+  sprintf(LCD_line[3], "%i, %i, %i",potVal_A,potVal_B,potVal_C);
 
-  //Serial.print("Converted rgb: ");
-  //Serial.print(red);Serial.print(' ');   
-  //Serial.print(green);Serial.print(' '); 
-  //Serial.println(blue);
+  if  ( (abs(potVal_A-potVal_A_prev)>pot_color_threshold) || (abs(potVal_B-potVal_B_prev)>pot_color_threshold) || (abs(potVal_C-potVal_C_prev)>pot_color_threshold) ) {
+    
+    //Serial.println("From nobs");
+    H = map(potVal_A, 0, 1023, 0, 360);
+    S = map(potVal_B, 0, 1023, 0, 100);
+    L = map(potVal_C, 0, 1023, 0, 100);
 
-  
-  //setRgb(rgb[0],rgb[1],rgb[2]);
+    potVal_A_prev = potVal_A;
+    potVal_B_prev = potVal_B;
+    potVal_C_prev = potVal_C;
+
+    setHsl(H,S,L);
+    
+  }
+  // sprintf(LCD_line3, "Fan rpm %i",(int)(frequency/2*60)/2);
+  // sprintf(LCD_line4, "Fan rpm %i",(int)(frequency/2*60)/2);
 
 
+  //update_lcd();
+  //delay(1000);
+  //Serial.println(firstPotVal);
 
 }
